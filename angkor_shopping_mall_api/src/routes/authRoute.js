@@ -1,0 +1,21 @@
+const express = require('express');
+const router = express.Router();
+
+const userController = require('../controllers/userController');
+const auth = require('../middlewares/auth');
+
+router.post('/login', userController.login);
+router.post('/google', userController.googleLogin);
+router.post('/verify-2fa', userController.verify2FA);
+router.post('/register', userController.create);
+router.post('/refresh-token', userController.refreshToken);
+router.post('/logout', userController.logout);
+router.post('/change-password', auth, userController.changePassword);
+router.post('/forgot-password', userController.sendResetOtp);
+router.post('/verify-reset-otp', userController.verifyResetOtp);
+router.post('/reset-password', userController.resetPassword);
+router.post('/telegram/otp/send', userController.sendResetOtpTelegram);
+router.post('/telegram/otp/verify', userController.verifyResetOtpTelegram);
+router.post('/telegram/password/reset', userController.resetPasswordTelegram);
+
+module.exports = router;

@@ -1,0 +1,369 @@
+const userService = require('../services/userService');
+
+const {
+    successResponse,
+    errorResponse,
+    handleControllerError
+} = require('../utils/response');
+
+class UserController {
+
+    async create(req, res) {
+        try {
+            const user = await userService.createUser(req.body);
+
+            return successResponse(
+                res,
+                'User created successfully',
+                user
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, 'Failed to create user');
+        }
+    }
+
+    async findAll(req, res) {
+        try {
+            const users = await userService.getAllUsers();
+
+            return successResponse(
+                res,
+                'Users retrieved successfully',
+                users
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async findOne(req, res) {
+        try {
+
+            const user = await userService.getUserById(req.params.id);
+
+            if (!user) {
+                return errorResponse(res, 'User not found', 404);
+            }
+
+            return successResponse(
+                res,
+                'User retrieved successfully',
+                user
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async update(req, res) {
+        try {
+
+            const user = await userService.updateUser(
+                req.params.id,
+                req.body
+            );
+
+            return successResponse(
+                res,
+                'User updated successfully',
+                user
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, 'Failed to update user');
+        }
+    }
+
+    async delete(req, res) {
+        try {
+
+            await userService.deleteUser(req.params.id);
+
+            return successResponse(
+                res,
+                'User deleted successfully'
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    
+    async googleLogin(req, res) {
+        try {
+            const result = await userService.googleLogin(req.body);
+            return successResponse(
+                res,
+                'Google login successful',
+                result
+            );
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async login(req, res) {
+        try {
+
+            const result = await userService.login(req.body);
+
+            return successResponse(
+                res,
+                'Login successful',
+                result
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async verify2FA(req, res) {
+        try {
+            const { temp_token, pin } = req.body;
+
+            const result = await userService.verify2FA(temp_token, pin);
+
+            return successResponse(
+                res,
+                '2FA verification successful',
+                result
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async setTwoFAPin(req, res) {
+        try {
+            const { id } = req.params;
+            const { pin } = req.body;
+
+            const result = await userService.setTwoFAPin(id, pin);
+
+            return successResponse(
+                res,
+                result.message,
+                result
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async disable2FA(req, res) {
+        try {
+            const { id } = req.params;
+
+            const result = await userService.disable2FA(id);
+
+            return successResponse(
+                res,
+                result.message,
+                result
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async refreshToken(req, res) {
+        try {
+
+            const { refreshToken } = req.body;
+
+            if (!refreshToken) {
+                return errorResponse(res, 'Refresh token is required');
+            }
+
+            const result = await userService.refreshToken(refreshToken);
+
+            return successResponse(
+                res,
+                'Token refreshed successfully',
+                result
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async logout(req, res) {
+        try {
+
+            const { refreshToken } = req.body;
+
+            if (!refreshToken) {
+                return errorResponse(res, 'Refresh token is required');
+            }
+
+            await userService.logout(refreshToken);
+
+            return successResponse(
+                res,
+                'Logout successful'
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async changePassword(req, res) {
+        try {
+
+            const { oldPassword, newPassword } = req.body;
+
+            await userService.changePassword(
+                req.user.id,
+                oldPassword,
+                newPassword
+            );
+
+            return successResponse(
+                res,
+                'Password changed successfully'
+            );
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+    async sendResetOtp(req, res) {
+        try {
+
+            const result = await userService.sendResetOtp(req.body.email);
+
+            return successResponse(res, 'OTP sent', result);
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async verifyResetOtp(req, res) {
+        try {
+
+            const { email, otp } = req.body;
+
+            const result = await userService.verifyOtp(email, otp);
+
+            return successResponse(res, 'OTP verified', result);
+
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async resetPassword(req, res) {
+        try {
+            const { resetToken, newPassword } = req.body;
+            const result = await userService.resetPassword(resetToken, newPassword);
+            return successResponse(res, "Password reset success", result);
+        } catch (err) {
+            return handleControllerError(res, err, err.message);
+        }
+    }
+    async sendResetOtpTelegram(req, res) {
+        try {
+            const result = await userService.sendResetOtpTelegram(req.body.phone);
+            return successResponse(res, "OTP sent", result);
+        } catch (err) {
+            return handleControllerError(res, err, err.message);
+        }
+    }
+
+    async verifyResetOtpTelegram(req, res) {
+        try {
+            const { phone, otp } = req.body;
+
+            const result = await userService.verifyOtpTelegram(phone, otp);
+            return successResponse(
+                res,
+                "OTP verified successfully",
+                result
+            );
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async resetPasswordTelegram(req, res) {
+        try {
+            const result = await userService.resetPasswordTelegram(
+                req.body.resetToken,
+                req.body.newPassword
+            );
+            return successResponse(res, "Password reset success", result);
+        } catch (err) {
+            return handleControllerError(res, err, err.message);
+        }
+    }
+
+    async adminChangePassword(req, res) {
+        try {
+            const { id } = req.params;
+            const { password } = req.body;
+
+            await userService.adminChangePassword(id, password);
+
+            return successResponse(
+                res,
+                'Password updated successfully'
+            );
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async getStaff(req, res) {
+        try {
+            const staff = await userService.getStaffUsers();
+
+            return successResponse(
+                res,
+                'Staff users retrieved successfully',
+                staff
+            );
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+
+    async heartbeat(req, res) {
+        try {
+            const userId = req.user?.userId || req.user?.id || req.body?.user_id || req.body?.id;
+            if (!userId) {
+                return successResponse(res, "Heartbeat acknowledged", { online: false });
+            }
+            const result = await userService.updateHeartbeat(userId);
+            return successResponse(res, "Heartbeat updated", result);
+        } catch (error) {
+            return successResponse(res, "Heartbeat acknowledged", { error: error.message });
+        }
+    }
+
+    async getCustomers(req, res) {
+        try {
+            const customers = await userService.getCustomers();
+
+            return successResponse(
+                res,
+                "Customers retrieved successfully",
+                customers
+            );
+        } catch (error) {
+            return handleControllerError(res, error, error.message);
+        }
+    }
+}
+
+module.exports = new UserController();

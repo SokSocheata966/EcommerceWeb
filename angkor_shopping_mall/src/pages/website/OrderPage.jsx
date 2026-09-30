@@ -1,0 +1,840 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useSelector, useDispatch } from "react-redux";
+import {
+  User,
+  Package,
+  Heart,
+  ChevronRight,
+  ShieldCheck,
+  Mail,
+  Phone,
+  MapPin,
+  ShoppingBag,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+  CreditCard,
+  QrCode,
+  Edit3,
+  Check,
+  X,
+  Loader2,
+  Sparkles,
+  CheckCircle2
+} from "lucide-react";
+import toast, { Toaster } from "react-hot-toast";
+import Header from "../../components/Header";
+import { getOrdersApi } from "../../services/orderService";
+import { updateCustomersApi } from "../../services/customerService";
+import { updateUser, setAuth } from "../../store/authSlice";
+import AbaPaymentModal from "../../components/AbaPaymentModal";
+import { TableSkeleton, KpiCardSkeleton } from "../../components/loading/LoadingSkeleton";
+import "./styles/OrderPage.css";
+
+function OrderPage() {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const auth = useSelector((state) => state.auth);
+
+  const isLoggedIn = !!auth.token;
+  const user = auth.user;
+  const role = auth.role;
+
+  // Profile Edit State
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    name: "",
+    email: "",
+    phone: ""
+  });
+
+  // Sync profileForm with user whenever user changes
+  useEffect(() => {
+    if (user) {
+      setProfileForm({
+        name: user.name || "",
+        email: user.email || "",
+        phone: user.phone || user.telephone || ""
+      });
+    }
+  }, [user]);
+
+  const handleStartEditProfile = () => {
+    setProfileForm({
+      name: user?.name || "",
+      email: user?.email || "",
+      phone: user?.phone || user?.telephone || ""
+    });
+    setIsEditingProfile(true);
+  };
+
+  const handleCancelEditProfile = () => {
+    setProfileForm({
+      name: user?.name || "",
+      email: user?.email || "",
+      phone: user?.phone || user?.telephone || ""
+    });
+    setIsEditingProfile(false);
+  };
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    const cleanName = profileForm.name.trim();
+    const cleanEmail = profileForm.email.trim();
+    const cleanPhone = profileForm.phone.trim();
+
+    if (!cleanName) {
+      toast.error("Please enter your name");
+      return;
+    }
+    if (!cleanEmail) {
+      toast.error("Please enter your email");
+      return;
+    }
+
+    try {
+      setIsSavingProfile(true);
+      const updatePayload = {
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone,
+        telephone: cleanPhone
+      };
+
+      const userId = user?.id || user?._id || user?.userId;
+      if (userId) {
+        try {
+          await updateCustomersApi(userId, updatePayload);
+        } catch (apiErr) {
+          console.warn("Backend user update returned error, applying local store sync:", apiErr);
+        }
+      }
+
+      // Update in Redux and localStorage
+      dispatch(updateUser(updatePayload));
+      dispatch(setAuth({ user: { ...user, ...updatePayload } }));
+      toast.success("Profile updated successfully!");
+      setIsEditingProfile(false);
+    } catch (err) {
+      console.error("Failed to update profile:", err);
+      toast.error(err?.message || "Failed to update profile details");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  // Tabs state: 'overview' | 'orders' | 'wishlist'
+  const [activeTab, setActiveTab] = useState("orders");
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [khqrModal, setKhqrModal] = useState({
+    isOpen: false,
+    orderId: null,
+    orderNumber: "",
+    amount: 0
+  });
+
+  const safeDate = (val) => {
+    try {
+      if (!val) return new Date().toISOString().split("T")[0];
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return new Date().toISOString().split("T")[0];
+      return d.toISOString().split("T")[0];
+    } catch {
+      return new Date().toISOString().split("T")[0];
+    }
+  };
+
+  // Load orders from API & localStorage fallback
+  const loadOrders = async () => {
+    if (isLoggedIn) {
+      try {
+        setLoading(true);
+        const res = await getOrdersApi();
+        // Handle various Axios/fetch response wrappings
+        const payload = res?.data?.data || res?.data || res || {};
+        const apiOrders = Array.isArray(payload)
+          ? payload
+          : (Array.isArray(payload.orders)
+              ? payload.orders
+              : (Array.isArray(payload.data) ? payload.data : []));
+
+        if (Array.isArray(apiOrders) && apiOrders.length >= 0) {
+          const formattedOrders = apiOrders.map((order, idx) => {
+            const rawItems = Array.isArray(order.items)
+              ? order.items
+              : (Array.isArray(order.order_items)
+                  ? order.order_items
+                  : (Array.isArray(order.products) ? order.products : []));
+
+            // Use readable order sequence or order_number instead of raw UUID
+            const displayId = (order.order_number && String(order.order_number).startsWith("OR-"))
+              ? `#${order.order_number}`
+              : (order.order_number && String(order.order_number).startsWith("#OR-"))
+              ? order.order_number
+              : (order.order_number && !String(order.order_number).includes("-") && !isNaN(Number(order.order_number)))
+              ? `#OR-${String(order.order_number).padStart(5, "0")}`
+              : (typeof order.id === "number" || (order.id && !String(order.id).includes("-") && String(order.id).length <= 5))
+              ? `#OR-${String(order.id).padStart(5, "0")}`
+              : `#OR-${String(idx + 1).padStart(5, "0")}`;
+
+            return {
+              id: displayId,
+              rawId: order.id,
+              date: safeDate(order.created_at || order.createdAt),
+              items: rawItems.reduce((acc, item) => acc + (Number(item?.quantity) || 1), 0),
+              subtotal: (parseFloat(order.subtotal_amount || order.total_amount || 0) || 0).toFixed(2),
+              tradeInDiscount: parseFloat(order.trade_in_discount || 0) || 0,
+              tradeInProduct: order.trade_in_product || null,
+              total: (parseFloat(order.total_amount || 0) || 0).toFixed(2),
+              status: order.status ? (String(order.status).charAt(0).toUpperCase() + String(order.status).slice(1)) : "Pending",
+              paymentMethod: order.payment_intent_id ? "Online Pay (Paid)" : "ABA KHQR / COD",
+              shippingInfo: {
+                fullName: user?.name || order.user?.name || "Customer",
+                email: user?.email || order.user?.email || "",
+                phone: order.contact_phone || "099888777",
+                address: order.shipping_address || "Phnom Penh",
+                city: ""
+              },
+              products: rawItems.map((item) => ({
+                id: item?.product?.id || item?.product_id || item?.id || Math.random(),
+                name: item?.product?.name || item?.name || "Product Item",
+                price: parseFloat(item?.price || item?.product?.price || 0) || 0,
+                image: item?.images?.[0]?.image_url || item?.product?.images?.[0]?.image_url || item?.product?.image_url || item?.product?.image || item?.image || "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=500",
+                quantity: Number(item?.quantity) || 1
+              }))
+            };
+          });
+          setOrders(formattedOrders);
+          localStorage.setItem("orders", JSON.stringify(formattedOrders));
+          return;
+        }
+      } catch (err) {
+        console.warn("Failed to load orders API, using fallback:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    const saved = localStorage.getItem("orders");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setOrders(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setOrders([]);
+      }
+    } else {
+      setOrders([]);
+    }
+  };
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      loadOrders();
+    }
+  }, [isLoggedIn]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (isLoggedIn) {
+        loadOrders();
+      }
+    };
+    window.addEventListener("orders:refresh", handler);
+    return () => window.removeEventListener("orders:refresh", handler);
+  }, [isLoggedIn, loadOrders]);
+
+  const toggleOrderDetails = (id) => {
+    if (expandedOrderId === id) {
+      setExpandedOrderId(null);
+    } else {
+      setExpandedOrderId(id);
+    }
+  };
+
+  const getStatusClass = (status) => {
+    if (status === "Delivered") return "status-delivered";
+    if (status === "Shipped") return "status-shipped";
+    if (status === "Paid") return "status-paid";
+    if (status === "Processing") return "status-processing";
+    if (status === "Completed") return "status-completed";
+    if (status === "Cancelled" || status === "Failed") return "status-cancelled";
+    return "status-pending";
+  };
+
+  // If not logged in, render unauthenticated CTA screen
+  if (!isLoggedIn) {
+    return (
+      <div className="orders-unauth-layout">
+        <Toaster position="bottom-right" />
+        <Header />
+        
+        <div className="unauth-container">
+          <div className="unauth-card">
+            <Package size={64} className="unauth-icon animate-pulse" />
+            <h2>Access Denied</h2>
+            <p>Please sign in to view your orders, track shipments, and check your wishlist history.</p>
+            <button className="unauth-login-btn" onClick={() => navigate("/auth/login")}>
+              Sign In to Your Account
+            </button>
+            <button className="unauth-home-btn" onClick={() => navigate("/")}>
+              Back to Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Calculate stats
+  const totalOrdersCount = orders.length;
+  const totalSpent = orders.reduce((acc, curr) => acc + (parseFloat(curr.total) || 0), 0).toFixed(2);
+  
+  let wishlistCount = 0;
+  try {
+    const saved = localStorage.getItem("wishlist");
+    wishlistCount = saved ? JSON.parse(saved).length : 0;
+  } catch {}
+
+  return (
+    <div className="orders-page-layout">
+      <Toaster position="bottom-right" />
+      
+      {/* Shared Header Navigation */}
+      <Header />
+
+      {/* Breadcrumbs */}
+      <div className="shop-breadcrumbs-section">
+        <div className="breadcrumbs-container">
+          <span className="breadcrumb-link" onClick={() => navigate("/")}>Home</span>
+          <ChevronRight size={14} className="breadcrumb-arrow" />
+          <span className="breadcrumb-current">My Account</span>
+        </div>
+      </div>
+
+      {/* Profile Page Grid Workspace */}
+      <div className="profile-workspace-container">
+        <div className="profile-grid-wrapper">
+          
+          {/* Left Sidebar Menu */}
+          <aside className="profile-sidebar-aside">
+            <div className="profile-brief-card">
+              <div className="profile-brief-avatar">
+                {user?.name ? user.name[0].toUpperCase() : <User />}
+              </div>
+              <div className="profile-brief-details">
+                <h3>{user?.name}</h3>
+                <span>{user?.email}</span>
+                <span className="badge-brief-role">{role ? role.toUpperCase() : "CUSTOMER"}</span>
+              </div>
+            </div>
+
+            <nav className="profile-sidebar-nav">
+              <button 
+                className={`profile-nav-btn ${activeTab === "overview" ? "active" : ""}`}
+                onClick={() => setActiveTab("overview")}
+              >
+                <User size={16} />
+                <span>Profile Overview</span>
+              </button>
+              <button 
+                className={`profile-nav-btn ${activeTab === "orders" ? "active" : ""}`}
+                onClick={() => setActiveTab("orders")}
+              >
+                <Package size={16} />
+                <span>My Orders ({totalOrdersCount})</span>
+              </button>
+              <button 
+                className="profile-nav-btn"
+                onClick={() => { navigate("/shop"); toast("Manage wishlist from the Shop page!"); }}
+              >
+                <Heart size={16} />
+                <span>Wishlist ({wishlistCount})</span>
+              </button>
+            </nav>
+          </aside>
+
+          {/* Right Main Content Panel */}
+          <main className="profile-content-main">
+            
+            {/* Overview Tab */}
+            {/* Overview Tab */}
+            {activeTab === "overview" && (
+              <div className="overview-tab-content">
+                {/* Premium Welcome Banner */}
+                <div className="welcome-banner-card">
+                  <div className="welcome-banner-content">
+                    <div className="welcome-tag">
+                      <Sparkles size={13} />
+                      <span>Verified Account Overview</span>
+                    </div>
+                    <h2>Welcome back, {user?.name ? user.name.split(" ")[0] : "Customer"}!</h2>
+                    <p>Manage your orders, edit profile credentials, and track your account statistics from one central dashboard.</p>
+                  </div>
+                  <div className="welcome-banner-decor">
+                    <div className="welcome-avatar-pill">
+                      <span>{user?.name ? user.name[0].toUpperCase() : "U"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Dashboard Stats */}
+                <div className="dashboard-stats-grid">
+                  <div className="dashboard-stat-card">
+                    <div className="stat-icon-wrapper green">
+                      <Package size={20} />
+                    </div>
+                    <div className="stat-card-text">
+                      <span className="stat-card-label">Total Orders</span>
+                      <span className="stat-card-val">{totalOrdersCount}</span>
+                    </div>
+                  </div>
+
+                  <div className="dashboard-stat-card">
+                    <div className="stat-icon-wrapper red">
+                      <Heart size={20} />
+                    </div>
+                    <div className="stat-card-text">
+                      <span className="stat-card-label">Wishlist Items</span>
+                      <span className="stat-card-val">{wishlistCount}</span>
+                    </div>
+                  </div>
+
+                  <div className="dashboard-stat-card">
+                    <div className="stat-icon-wrapper blue">
+                      <CreditCard size={20} />
+                    </div>
+                    <div className="stat-card-text">
+                      <span className="stat-card-label">Total Expenditure</span>
+                      <span className="stat-card-val">${totalSpent}</span>
+                    </div>
+                  </div>
+
+                  <div className="dashboard-stat-card">
+                    <div className="stat-icon-wrapper gold">
+                      <ShieldCheck size={20} />
+                    </div>
+                    <div className="stat-card-text">
+                      <span className="stat-card-label">Account Status</span>
+                      <span className="stat-card-val status-verified">
+                        <CheckCircle2 size={15} /> Verified
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* User Details Details Card */}
+                <div className="user-details-card">
+                  <div className="user-details-card-header">
+                    <div className="card-header-titles">
+                      <div className="header-badge-icon">
+                        <ShieldCheck size={20} />
+                      </div>
+                      <div>
+                        <h3>Account & Personal Credentials</h3>
+                        <p className="card-sub-description">Manage and update your customer profile details</p>
+                      </div>
+                    </div>
+                    {!isEditingProfile ? (
+                      <button 
+                        type="button"
+                        className="btn-edit-profile-trigger"
+                        onClick={handleStartEditProfile}
+                      >
+                        <Edit3 size={15} />
+                        <span>Edit Profile</span>
+                      </button>
+                    ) : (
+                      <button 
+                        type="button"
+                        className="btn-cancel-profile-trigger"
+                        onClick={handleCancelEditProfile}
+                        disabled={isSavingProfile}
+                      >
+                        <X size={15} />
+                        <span>Cancel</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {!isEditingProfile ? (
+                    <div className="details-rows-list">
+                      <div className="details-row-item">
+                        <div className="row-label">
+                          <div className="row-icon-box green"><User size={15} /></div>
+                          <span>Full Name</span>
+                        </div>
+                        <div className="row-value bold">{user?.name || "Customer"}</div>
+                      </div>
+                      <div className="details-row-item">
+                        <div className="row-label">
+                          <div className="row-icon-box blue"><Mail size={15} /></div>
+                          <span>Email Address</span>
+                        </div>
+                        <div className="row-value">{user?.email || "—"}</div>
+                      </div>
+                      <div className="details-row-item">
+                        <div className="row-label">
+                          <div className="row-icon-box purple"><Phone size={15} /></div>
+                          <span>Phone Number</span>
+                        </div>
+                        <div className="row-value">
+                          {user?.phone || user?.telephone ? (
+                            <span className="user-phone-val">{user.phone || user.telephone}</span>
+                          ) : (
+                            <span className="text-muted-italic">Not provided</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="details-row-item">
+                        <div className="row-label">
+                          <div className="row-icon-box gold"><ShieldCheck size={15} /></div>
+                          <span>Assigned Role</span>
+                        </div>
+                        <div className="row-value">
+                          <span className="role-pill-badge">{role ? role.toUpperCase() : "CUSTOMER"}</span>
+                        </div>
+                      </div>
+                      <div className="details-row-item">
+                        <div className="row-label">
+                          <div className="row-icon-box emerald"><MapPin size={15} /></div>
+                          <span>Default Store Branch</span>
+                        </div>
+                        <div className="row-value store-branch-text">Angkor Mall, Phnom Penh Central</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleSaveProfile} className="profile-edit-inline-form">
+                      <div className="profile-form-grid">
+                        <div className="profile-input-group">
+                          <label htmlFor="profile-form-name">
+                            <User size={14} /> Full Name
+                          </label>
+                          <div className="input-with-icon">
+                            <User size={15} className="input-prefix-icon" />
+                            <input
+                              id="profile-form-name"
+                              type="text"
+                              className="profile-text-input has-prefix"
+                              value={profileForm.name}
+                              onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })}
+                              placeholder="Enter your full name"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="profile-input-group">
+                          <label htmlFor="profile-form-email">
+                            <Mail size={14} /> Email Address
+                          </label>
+                          <div className="input-with-icon">
+                            <Mail size={15} className="input-prefix-icon" />
+                            <input
+                              id="profile-form-email"
+                              type="email"
+                              className="profile-text-input has-prefix"
+                              value={profileForm.email}
+                              onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
+                              placeholder="Enter your email address"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="profile-input-group full-width">
+                          <label htmlFor="profile-form-phone">
+                            <Phone size={14} /> Phone Number
+                          </label>
+                          <div className="input-with-icon">
+                            <Phone size={15} className="input-prefix-icon" />
+                            <input
+                              id="profile-form-phone"
+                              type="tel"
+                              className="profile-text-input has-prefix"
+                              value={profileForm.phone}
+                              onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                              placeholder="e.g. +855 12 345 678 or 097 424 2291"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="profile-form-actions">
+                        <button
+                          type="button"
+                          className="btn-profile-secondary"
+                          onClick={handleCancelEditProfile}
+                          disabled={isSavingProfile}
+                        >
+                          <X size={15} /> Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="btn-profile-primary"
+                          disabled={isSavingProfile}
+                        >
+                          {isSavingProfile ? (
+                            <>
+                              <Loader2 size={15} className="animate-spin" />
+                              <span>Saving...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Check size={15} />
+                              <span>Save Changes</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Orders Tab */}
+            {activeTab === "orders" && (
+              <div className="orders-tab-content">
+                <div className="orders-header-row">
+                  <h3>Recent Orders History</h3>
+                  <span className="order-counter-badge">{orders.length} orders total</span>
+                </div>
+
+                {loading ? (
+                  <TableSkeleton rows={4} cols={5} hasImage={true} />
+                ) : orders.length === 0 ? (
+                  <div className="empty-orders-view">
+                    <ShoppingBag size={48} className="empty-orders-icon" />
+                    <h4>No Orders Placed</h4>
+                    <p>You haven't ordered any items yet. Visit our shop and get started!</p>
+                    <button className="orders-shop-btn" onClick={() => navigate("/shop")}>
+                      Explore Shop Catalog
+                    </button>
+                  </div>
+                ) : (
+                  <div className="orders-table-wrapper">
+                    {orders.map((order) => (
+                      <div key={order.id} className="accordion-order-item">
+                        {/* Accordion header row */}
+                        <div 
+                          className={`order-accordion-header ${expandedOrderId === order.id ? "expanded" : ""}`}
+                          onClick={() => toggleOrderDetails(order.id)}
+                        >
+                          <div className="order-main-meta">
+                            <span className="meta-id">{order.id}</span>
+                            <span className="meta-date"><Clock size={12} /> {order.date}</span>
+                          </div>
+
+                          <div className="order-summary-meta">
+                            <span className="meta-items-count">{order.items} {order.items === 1 ? "item" : "items"}</span>
+                            <span className="meta-total bold">${order.total}</span>
+                          </div>
+
+                          <div className="order-status-meta">
+                            <span className={`status-badge-tag ${getStatusClass(order.status)}`}>
+                              {order.status}
+                            </span>
+                            {expandedOrderId === order.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          </div>
+                        </div>
+
+                        {/* Accordion details panel */}
+                        {expandedOrderId === order.id && (
+                          <div className="order-accordion-details">
+                            {/* Live Delivery Status Stepper */}
+                            {(() => {
+                              const s = String(order.status || "").toLowerCase();
+                              const isCompleted = s === "completed" || s === "delivered";
+                              const isShipped = s === "shipped" || s === "delivering" || s === "in_transit" || isCompleted;
+                              const isReady = s === "ready" || isShipped;
+                              const isProcessing = s === "processing" || s === "preparing" || isReady;
+
+                              return (
+                                <div className="delivery-tracking-timeline-card">
+                                  <div className="tracking-header">
+                                    <h6>🚚 Live Delivery & Fulfillment Tracker</h6>
+                                    <span className={`tracking-live-tag ${isCompleted ? "arrived" : isShipped ? "in-transit" : "processing"}`}>
+                                      {isCompleted ? "✅ Delivered & Arrived" : isShipped ? "🛵 Out for Delivery" : isProcessing ? "📦 In Packing" : "🕒 Order Placed"}
+                                    </span>
+                                  </div>
+
+                                  <div className="tracking-stepper">
+                                    <div className={`step-node active`}>
+                                      <div className="step-circle">✓</div>
+                                      <span>Order Placed</span>
+                                    </div>
+                                    <div className={`step-line ${isProcessing ? "active" : ""}`} />
+                                    <div className={`step-node ${isProcessing ? "active" : ""}`}>
+                                      <div className="step-circle">{isProcessing ? "✓" : "2"}</div>
+                                      <span>In Packing</span>
+                                    </div>
+                                    <div className={`step-line ${isShipped ? "active" : ""}`} />
+                                    <div className={`step-node ${isShipped ? "active" : ""}`}>
+                                      <div className="step-circle">{isShipped ? "✓" : "3"}</div>
+                                      <span>Out for Delivery</span>
+                                    </div>
+                                    <div className={`step-line ${isCompleted ? "active" : ""}`} />
+                                    <div className={`step-node ${isCompleted ? "active" : ""}`}>
+                                      <div className="step-circle">{isCompleted ? "✓" : "4"}</div>
+                                      <span>Delivered</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Assigned Driver / Courier Info Banner */}
+                                  {isShipped && (
+                                    <div className="driver-dispatch-info-box">
+                                      <div className="driver-avatar-icon">🛵</div>
+                                      <div className="driver-meta">
+                                        <strong>Assigned Courier: {order.delivery?.carrier || order.delivery_carrier || "Express Mall Delivery"}</strong>
+                                        <span>Driver: <strong>{order.delivery?.driver_name || order.delivery_driver_name || "Assigned Driver"}</strong></span>
+                                        {(order.delivery?.driver_phone || order.delivery_driver_phone) && (
+                                          <a href={`tel:${order.delivery?.driver_phone || order.delivery_driver_phone}`} className="driver-phone-link">
+                                            📞 Call Driver: {order.delivery?.driver_phone || order.delivery_driver_phone}
+                                          </a>
+                                        )}
+                                      </div>
+                                      <div className="driver-eta-box">
+                                        <small>Estimated Arrival</small>
+                                        <strong>{order.delivery?.estimated_time || order.estimated_delivery_time || "15-30 mins"}</strong>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {isCompleted && (
+                                    <div className="delivery-arrived-banner">
+                                      <span>🎉 Package successfully arrived & handed over to you! Thank you for shopping with Angkor Mall.</span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+
+                            {/* Billing & Address */}
+                            <div className="order-details-grid-2col">
+                              <div className="details-info-card">
+                                <h5>Shipping Details</h5>
+                                <p className="bold-name">{order.shippingInfo.fullName}</p>
+                                <p><Mail size={12} /> {order.shippingInfo.email}</p>
+                                <p><Phone size={12} /> {order.shippingInfo.phone}</p>
+                                <p><MapPin size={12} /> {order.shippingInfo.address}, {order.shippingInfo.city}</p>
+                              </div>
+
+                              <div className="details-info-card">
+                                <h5>Order Calculations</h5>
+                                <div className="billing-details-lines">
+                                  <div className="billing-line">
+                                    <span>Payment Mode:</span>
+                                    <span className="bold">{order.paymentMethod || "COD"}</span>
+                                  </div>
+                                  <div className="billing-line">
+                                    <span>Subtotal:</span>
+                                    <span>${order.subtotal || order.total}</span>
+                                  </div>
+                                  {order.tradeInDiscount > 0 && (
+                                    <div className="billing-line" style={{ color: "#16a34a", fontWeight: 600 }}>
+                                      <span>Trade-In Credit Applied:</span>
+                                      <span>-${order.tradeInDiscount.toFixed(2)}</span>
+                                    </div>
+                                  )}
+                                  <div className="billing-line">
+                                    <span>Shipping Delivery:</span>
+                                    <span>$4.99</span>
+                                  </div>
+                                  <div className="billing-line total-highlight">
+                                    <span>Grand Total:</span>
+                                    <span className="bold text-green">${order.total}</span>
+                                  </div>
+                                </div>
+
+                                {String(order.status).toLowerCase().includes("pending") && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setKhqrModal({
+                                        isOpen: true,
+                                        orderId: order.rawId || order.id?.replace("#ORD-", ""),
+                                        orderNumber: order.id,
+                                        amount: parseFloat(order.total)
+                                      })
+                                    }
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      gap: "8px",
+                                      width: "100%",
+                                      marginTop: "12px",
+                                      padding: "10px",
+                                      background: "linear-gradient(135deg, #00294B 0%, #004B7D 100%)",
+                                      color: "#ffffff",
+                                      border: "none",
+                                      borderRadius: "12px",
+                                      fontWeight: 700,
+                                      fontSize: "13px",
+                                      cursor: "pointer",
+                                      boxShadow: "0 4px 12px rgba(0, 41, 75, 0.25)"
+                                    }}
+                                  >
+                                    <QrCode size={16} /> Pay with ABA PayWay
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Products breakdown */}
+                            <div className="details-products-section">
+                              <h5 style={{ margin: "0 0 8px 0" }}>Products Purchased</h5>
+                              <div className="products-mini-cards-list">
+                                {order.products.map((item, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="product-mini-card"
+                                    onClick={() => navigate(`/product/${item.id || item.product_id || 1}`)}
+                                    style={{ cursor: "pointer" }}
+                                  >
+                                    <img src={item.image} alt={item.name} />
+                                    <div className="mini-card-info">
+                                      <h6>{item.name}</h6>
+                                      <span>Qty: <strong>{item.quantity}</strong> &times; ${item.price}</span>
+                                    </div>
+                                    <span className="mini-card-total-cost bold">
+                                      ${(item.price * item.quantity).toFixed(2)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </main>
+
+        </div>
+      </div>
+
+      {/* ABA PayWay Payment Modal */}
+      <AbaPaymentModal
+        isOpen={khqrModal.isOpen}
+        onClose={() => setKhqrModal((prev) => ({ ...prev, isOpen: false }))}
+        orderId={khqrModal.orderId}
+        orderNumber={khqrModal.orderNumber}
+        amount={khqrModal.amount}
+        onSuccess={() => {
+          loadOrders();
+        }}
+      />
+    </div>
+  );
+}
+
+export default OrderPage;

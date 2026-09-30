@@ -1,0 +1,739 @@
+import React, { useState, useEffect, useRef } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { useSelector, useDispatch } from "react-redux";
+import {
+  Heart,
+  ShoppingBag,
+  User,
+  ChevronDown,
+  LogOut,
+  LayoutDashboard,
+  Menu,
+  X,
+  Sparkles,
+  Home,
+  Grid,
+  ChevronRight,
+  Repeat,
+  Bell,
+  Headphones,
+  MessageSquare,
+  Globe,
+  Settings
+} from "lucide-react";
+import toast from "react-hot-toast";
+import Swal from "sweetalert2";
+import { clearAuth } from "../store/authSlice";
+import { useTranslation } from "../context/LanguageContext";
+import {
+  getMySupportMessagesApi,
+  trackSupportMessagesApi
+} from "../services/supportMessageService";
+import CartDrawer from "./CartDrawer";
+import MobileBottomNav from "./MobileBottomNav";
+import SettingsModal from "./SettingsModal";
+import "./Header.css";
+import logo from "../assets/logo.jpg";
+
+function Header() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const dispatch = useDispatch();
+  const { t, language, setLanguage } = useTranslation();
+  const auth = useSelector((state) => state.auth || {});
+
+  const isLoggedIn = !!auth.token;
+  const user = auth.user;
+  const role = auth.role;
+
+  const userRoleStr = (
+    role ||
+    user?.role ||
+    user?.role_name ||
+    user?.roles?.[0]?.name ||
+    (Array.isArray(user?.roles) ? user.roles.map((r) => r.name || r).join(" ") : "") ||
+    ""
+  ).toLowerCase();
+
+  const isCustomer =
+    userRoleStr === "customer" ||
+    userRoleStr === "customers" ||
+    (!userRoleStr && !user);
+
+  const canAccessAdmin = isLoggedIn && !isCustomer;
+
+  const displayRoleName =
+    user?.role_name ||
+    (Array.isArray(user?.roles) ? user.roles.map((r) => r.name || r).join(", ") : null) ||
+    (typeof user?.role === "string" ? user.role : null) ||
+    (typeof role === "string" ? role : null) ||
+    (isCustomer ? "Customer" : "Administrator");
+
+  // Header Interactive UI States
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [userNotifOpen, setUserNotifOpen] = useState(false);
+  const [userReplies, setUserReplies] = useState([]);
+  const [userUnreadRepliesCount, setUserUnreadRepliesCount] = useState(0);
+  const notifRef = useRef(null);
+
+  // Read Cart & Wishlist counters from localStorage (reactive to event updates)
+  const [cartCount, setCartCount] = useState(() => {
+    return parseInt(localStorage.getItem("cartCount") || "0", 10);
+  });
+
+  const [wishlistCount, setWishlistCount] = useState(() => {
+    try {
+      const items = JSON.parse(localStorage.getItem("wishlist") || "[]");
+      return items.length;
+    } catch {
+      return 0;
+    }
+  });
+
+  // Fetch admin replies & customer notifications
+  const fetchUserReplies = async () => {
+    try {
+      let tickets = [];
+      const storedIds = JSON.parse(localStorage.getItem("angkor_guest_ticket_ids") || "[]");
+
+      if (isLoggedIn) {
+        try {
+          const res = await getMySupportMessagesApi();
+          const list = res?.data || res || [];
+          if (Array.isArray(list)) tickets = [...list];
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (storedIds.length > 0) {
+        try {
+          const trackRes = await trackSupportMessagesApi({ ids: storedIds });
+          const trackList = trackRes?.data || trackRes || [];
+          if (Array.isArray(trackList)) {
+            const existingIds = new Set(tickets.map((t) => t.id));
+            for (const t of trackList) {
+              if (!existingIds.has(t.id)) {
+                tickets.push(t);
+                existingIds.add(t.id);
+              }
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      const readReplyIds = JSON.parse(localStorage.getItem("angkor_read_reply_ids") || "[]");
+      const replied = tickets.filter((t) => t.admin_reply);
+      setUserReplies(replied);
+
+      // Only count replies that the user has NOT read yet
+      const unreadCount = replied.filter((t) => !readReplyIds.includes(t.id) && t.status === "replied").length;
+      setUserUnreadRepliesCount(unreadCount);
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  // Mark all replies as read when opening notification dropdown
+  const handleToggleNotifDropdown = () => {
+    const nextState = !userNotifOpen;
+    setUserNotifOpen(nextState);
+    if (nextState && userReplies.length > 0) {
+      const readReplyIds = JSON.parse(localStorage.getItem("angkor_read_reply_ids") || "[]");
+      const allIds = userReplies.map((t) => t.id);
+      const updated = Array.from(new Set([...readReplyIds, ...allIds]));
+      localStorage.setItem("angkor_read_reply_ids", JSON.stringify(updated));
+      setUserUnreadRepliesCount(0);
+      window.dispatchEvent(new Event("support-replies-read"));
+    }
+  };
+
+  useEffect(() => {
+    fetchUserReplies();
+    const interval = setInterval(() => {
+      if (!document.hidden && isLoggedIn) {
+        fetchUserReplies();
+      }
+    }, 60000); // 60s instead of 10s to prevent network spam
+
+    const handleRepliesRead = () => fetchUserReplies();
+    window.addEventListener("support-replies-read", handleRepliesRead);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("support-replies-read", handleRepliesRead);
+    };
+  }, [isLoggedIn]);
+
+  // Close dropdown on outside click or touch
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (notifRef.current && !notifRef.current.contains(event.target)) {
+        setUserNotifOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
+  }, []);
+
+  // Listen to custom window events for synchronized count updates
+  useEffect(() => {
+    const handleCartUpdate = () => {
+      setCartCount(parseInt(localStorage.getItem("cartCount") || "0", 10));
+      try {
+        const items = JSON.parse(localStorage.getItem("wishlist") || "[]");
+        setWishlistCount(items.length);
+      } catch {
+        setWishlistCount(0);
+      }
+    };
+
+    const handleOpenCart = () => {
+      setProfileDropdownOpen(false);
+      setIsCartOpen(true);
+    };
+
+    window.addEventListener("cart-updated", handleCartUpdate);
+    window.addEventListener("open-cart", handleOpenCart);
+
+    return () => {
+      window.removeEventListener("cart-updated", handleCartUpdate);
+      window.removeEventListener("open-cart", handleOpenCart);
+    };
+  }, []);
+
+  // Lock body scroll when mobile drawer is open
+  useEffect(() => {
+    if (mobileMenuOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [mobileMenuOpen]);
+
+  // Automatically close mobile menu when navigating to another page
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  const handleLogout = () => {
+    dispatch(clearAuth());
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    setProfileDropdownOpen(false);
+    Swal.fire({
+      icon: "success",
+      title: "Logged Out",
+      text: "You have been logged out successfully.",
+      timer: 1500,
+      showConfirmButton: false
+    });
+    navigate("/auth/login");
+  };
+
+  const currentPath = location.pathname;
+
+  return (
+    <>
+      <header className="home-header">
+        <div className="header-container">
+          {/* Logo Section */}
+          <div className="home-logo-brand" onClick={() => navigate("/")} title="Angkor Shopping Mall">
+            <span className="home-logo-icon">
+              <img src={logo} alt="Angkor Shopping Mall Logo" />
+            </span>
+            <span className="home-logo-text auth-logo-text">
+              <span className="brand-word-angkor">Angkor</span>{" "}
+              <span className="brand-word-mall">Shopping Mall</span>
+            </span>
+          </div>
+
+          {/* Desktop Navigation */}
+          <nav className="desktop-nav">
+            <span
+              className={`nav-item ${currentPath === "/" ? "active" : ""}`}
+              onClick={() => navigate("/")}
+            >
+              {t("nav.home", "Home")}
+            </span>
+            <span
+              className={`nav-item ${currentPath === "/shop" ? "active" : ""}`}
+              onClick={() => navigate("/shop")}
+            >
+              {t("nav.shop", "Shop")}
+            </span>
+            <span
+              className={`nav-item ai-badge-nav ${currentPath === "/recommendations" ? "active" : ""}`}
+              onClick={() => navigate("/recommendations")}
+            >
+              {t("nav.aiRecommendations", "AI Recommendations")} <Sparkles size={12} className="sparkle-icon" />
+            </span>
+            <span
+              className={`nav-item ${currentPath === "/orders" ? "active" : ""}`}
+              onClick={() => navigate("/orders")}
+            >
+              {t("nav.orders", "Orders")}
+            </span>
+          </nav>
+
+          {/* Nav Actions (Wishlist, Cart, Settings, Notifications, Profile) */}
+          <div className="header-actions">
+            {/* User Notification Bell for Support & Admin Replies */}
+            <div className="icon-wrapper notif-icon-wrapper" ref={notifRef}>
+              <div
+                className="notif-trigger-btn"
+                onClick={handleToggleNotifDropdown}
+                title="Support Inquiries & Admin Replies"
+                style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
+              >
+                <Bell size={20} className={userUnreadRepliesCount > 0 ? "bell-active" : ""} />
+                {userUnreadRepliesCount > 0 && (
+                  <span className="action-badge bg-red notif-pulse-badge">{userUnreadRepliesCount}</span>
+                )}
+              </div>
+
+              {/* Customer Notifications Dropdown */}
+              {userNotifOpen && (
+                <div className="user-notif-dropdown">
+                  <div className="user-notif-header">
+                    <div className="user-notif-title">
+                      <MessageSquare size={16} />
+                      <span>{t("nav.support", "Support Messages")}</span>
+                      {userUnreadRepliesCount > 0 && (
+                        <span className="user-notif-pill">{userUnreadRepliesCount}</span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="user-notif-close-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setUserNotifOpen(false);
+                      }}
+                      title="Close"
+                      aria-label="Close notifications"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+
+                  <div className="user-notif-list">
+                    {userReplies.length === 0 ? (
+                      <div className="user-notif-empty">
+                        <div className="user-notif-empty-icon">
+                          <Headphones size={22} />
+                        </div>
+                        <strong className="user-notif-empty-title">
+                          {language === "km" ? "មិនទាន់មានសារទេ" : "No Support Messages"}
+                        </strong>
+                        <p className="user-notif-empty-desc">
+                          {language === "km"
+                            ? "មិនទាន់មានសារឆ្លើយតបពី Admin នៅឡើយទេ។ ត្រូវការជំនួយ? សូមផ្ញើសារបានគ្រប់ពេល!"
+                            : "No replies yet. Have questions or need assistance? Message admin anytime!"}
+                        </p>
+                      </div>
+                    ) : (
+                      userReplies.map((item) => (
+                        <div
+                          key={item.id}
+                          className={`user-notif-item ${item.status === "replied" ? "unread-reply" : ""}`}
+                          onClick={() => {
+                            setUserNotifOpen(false);
+                            window.dispatchEvent(new Event("open-chatbot-tickets"));
+                          }}
+                        >
+                          <div className="user-notif-avatar">
+                            <Headphones size={15} />
+                          </div>
+                          <div className="user-notif-content">
+                            <div className="user-notif-row">
+                              <strong className="user-notif-sender">Admin: {item.subject}</strong>
+                              <span className="user-notif-time">
+                                {item.replied_at
+                                  ? new Date(item.replied_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                                  : "Just now"}
+                              </span>
+                            </div>
+                            <p className="user-notif-snippet">{item.admin_reply}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="user-notif-footer">
+                    <button
+                      type="button"
+                      className="btn-open-chat-support"
+                      onClick={() => {
+                        setUserNotifOpen(false);
+                        window.dispatchEvent(new Event("open-chatbot-tickets"));
+                      }}
+                    >
+                      <Headphones size={13} /> {language === "km" ? "បើកផ្ទាំងសារ Admin" : "Open in Support Assistant"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div
+              className="icon-wrapper header-wishlist-trigger"
+              onClick={() => navigate("/wishlist")}
+              title="View My Wishlist"
+              style={{ cursor: "pointer" }}
+            >
+              <Heart size={20} className={wishlistCount > 0 ? "heart-active" : ""} />
+              {wishlistCount > 0 && <span className="action-badge bg-red">{wishlistCount}</span>}
+            </div>
+
+            <div
+              className="icon-wrapper header-cart-trigger"
+              onClick={() => setIsCartOpen(true)}
+              title="View Shopping Cart"
+            >
+              <ShoppingBag size={20} />
+              {cartCount > 0 && <span className="action-badge bg-green">{cartCount}</span>}
+            </div>
+
+            {/* Quick Settings Icon Button */}
+            <div
+              className="icon-wrapper header-settings-trigger"
+              onClick={() => setIsSettingsOpen(true)}
+              title={language === "km" ? "ការកំណត់គេហទំព័រ (ភាសា & ស្បែកពណ៌)" : "Website Settings (Language & Theme)"}
+              style={{ cursor: "pointer" }}
+            >
+              <Settings size={20} />
+            </div>
+
+            {/* Profile Dropdown */}
+            <div className="profile-menu-container">
+              {isLoggedIn ? (
+                <div
+                  className="profile-logged-trigger"
+                  onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+                >
+                  <div className="avatar-circle" style={{ position: "relative" }}>
+                    {user?.name ? user.name[0].toUpperCase() : <User size={16} />}
+                    <span className="presence-dot-bubble online" title="Active Online" />
+                  </div>
+                  <span className="profile-username mobile-hide-username">{user?.name?.split(" ")[0]}</span>
+                  <ChevronDown size={14} className={`arrow-icon mobile-hide-arrow ${profileDropdownOpen ? "open" : ""}`} />
+                </div>
+              ) : (
+                <button className="login-trigger-btn" onClick={() => navigate("/auth/login")}>
+                  <User size={16} />
+                  <span className="mobile-hide-username">{t("nav.login", "Sign In")}</span>
+                </button>
+              )}
+
+              {profileDropdownOpen && isLoggedIn && (
+                <div className="profile-dropdown-card">
+                  <div className="dropdown-user-info">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="info-name">{user?.name || "Member User"}</span>
+                      <span className="online-mini-chip">🟢 Online</span>
+                    </div>
+                    <span className="info-email">{user?.email || ""}</span>
+                    <span className="info-role">{displayRoleName.toUpperCase()}</span>
+                  </div>
+
+                  {canAccessAdmin && (
+                    <button
+                      className="dropdown-item"
+                      onClick={() => {
+                        setProfileDropdownOpen(false);
+                        navigate("/admin/dashboard");
+                      }}
+                    >
+                      <LayoutDashboard size={16} />
+                      <span>{t("nav.dashboard", "Admin Dashboard")}</span>
+                    </button>
+                  )}
+                  <button className="dropdown-item logout-item" onClick={handleLogout}>
+                    <LogOut size={16} />
+                    <span>{t("nav.logout", "Logout")}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Mobile Menu Toggle */}
+            <button
+              className="mobile-menu-toggle"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              aria-label="Toggle Mobile Navigation Menu"
+            >
+              {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Mobile Backdrop & Modern Slide-In Drawer (outside header to avoid stacking context constraint) */}
+      {mobileMenuOpen && (
+        <>
+          <div
+            className="mobile-nav-backdrop"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+            <div className="mobile-nav-panel">
+              {/* Drawer Top Header with Brand & Close Button */}
+              <div className="mobile-drawer-header">
+                <div
+                  className="mobile-drawer-brand"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    navigate("/");
+                  }}
+                >
+                  <span className="home-logo-icon">
+                    <img src={logo} alt="Angkor Shopping Mall Logo" />
+                  </span>
+                  <span className="home-logo-text">
+                    <span className="brand-word-angkor">Angkor</span>{" "}
+                    <span className="brand-word-mall">Mall</span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="mobile-drawer-close-btn"
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-label="Close menu"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Drawer Scrollable Content */}
+              <div className="mobile-drawer-scrollable">
+                {/* User Account Brief Card inside Mobile Drawer */}
+                {isLoggedIn ? (
+                  <div className="mobile-user-card">
+                    <div className="avatar-circle" style={{ position: "relative" }}>
+                      {user?.name ? user.name[0].toUpperCase() : <User size={16} />}
+                      <span className="presence-dot-bubble online" title="Active Online" />
+                    </div>
+                    <div className="mobile-user-info">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="info-name">{user?.name || "Member User"}</span>
+                        <span className="online-mini-chip">🟢 Online</span>
+                      </div>
+                      <span className="info-email">{user?.email || ""}</span>
+                      <span className="info-role-badge">{displayRoleName.toUpperCase()}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="mobile-guest-card"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      navigate("/auth/login");
+                    }}
+                  >
+                    <div className="guest-icon-box">
+                      <User size={20} />
+                    </div>
+                    <div className="guest-info">
+                      <strong>{language === "km" ? "សូមស្វាគមន៍មកកាន់ Angkor Mall" : "Welcome to Angkor Mall"}</strong>
+                      <span>{language === "km" ? "ចុចទីនេះដើម្បីចូលគណនី / ចុះឈ្មោះ" : "Sign In / Register an account"}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mobile Language & Settings Strip */}
+                <div className="mobile-lang-strip">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span className="mobile-lang-title">
+                      <Globe size={15} /> {t("header.switchLang", "Language")}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-quick-settings"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        setIsSettingsOpen(true);
+                      }}
+                    >
+                      <Settings size={12} /> {language === "km" ? "ការកំណត់" : "Settings"}
+                    </button>
+                  </div>
+                  <div className="mobile-lang-btn-group">
+                    <button
+                      type="button"
+                      className={`lang-option-pill ${language === "km" ? "active" : ""}`}
+                      onClick={() => setLanguage("km")}
+                    >
+                      🇰🇭 ខ្មែរ (KM)
+                    </button>
+                    <button
+                      type="button"
+                      className={`lang-option-pill ${language === "en" ? "active" : ""}`}
+                      onClick={() => setLanguage("en")}
+                    >
+                      🇺🇸 English (EN)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mobile-nav-links-list">
+                  <div
+                    className={`mobile-nav-item ${currentPath === "/" ? "active" : ""}`}
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      navigate("/");
+                    }}
+                  >
+                    <div className="nav-item-left">
+                      <Home size={18} />
+                      <span>{t("nav.home", "Home")}</span>
+                    </div>
+                    <ChevronRight size={16} className="arrow-dim" />
+                  </div>
+
+                  <div
+                    className={`mobile-nav-item ${currentPath === "/shop" ? "active" : ""}`}
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      navigate("/shop");
+                    }}
+                  >
+                    <div className="nav-item-left">
+                      <ShoppingBag size={18} />
+                      <span>{t("nav.shop", "Shop Catalog")}</span>
+                    </div>
+                    <ChevronRight size={16} className="arrow-dim" />
+                  </div>
+
+                  <div
+                    className={`mobile-nav-item ai-badge-mobile ${currentPath === "/recommendations" ? "active" : ""}`}
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      navigate("/recommendations");
+                    }}
+                  >
+                    <div className="nav-item-left">
+                      <Sparkles size={18} className="text-green-icon" />
+                      <span>{t("nav.aiRecommendations", "AI Recommendations")}</span>
+                    </div>
+                    <ChevronRight size={16} className="arrow-dim" />
+                  </div>
+
+                  <div
+                    className={`mobile-nav-item ${currentPath === "/orders" ? "active" : ""}`}
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      navigate("/orders");
+                    }}
+                  >
+                    <div className="nav-item-left">
+                      <Grid size={18} />
+                      <span>{t("nav.orders", "My Orders")}</span>
+                    </div>
+                    <ChevronRight size={16} className="arrow-dim" />
+                  </div>
+
+                  <div
+                    className={`mobile-nav-item ${currentPath === "/wishlist" ? "active" : ""}`}
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      navigate("/wishlist");
+                    }}
+                  >
+                    <div className="nav-item-left">
+                      <Heart size={18} />
+                      <span>{t("nav.wishlist", "My Wishlist")}</span>
+                    </div>
+                    {wishlistCount > 0 ? (
+                      <span className="badge-active-pill">{wishlistCount}</span>
+                    ) : (
+                      <ChevronRight size={16} className="arrow-dim" />
+                    )}
+                  </div>
+
+                  {/* Website Settings Item in Mobile Drawer */}
+                  <div
+                    className="mobile-nav-item"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setIsSettingsOpen(true);
+                    }}
+                  >
+                    <div className="nav-item-left">
+                      <Settings size={18} />
+                      <span>{language === "km" ? "ការកំណត់គេហទំព័រ (Settings)" : "Website Settings"}</span>
+                    </div>
+                    <ChevronRight size={16} className="arrow-dim" />
+                  </div>
+
+                  {canAccessAdmin && (
+                    <div
+                      className="mobile-nav-item admin-link"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        navigate("/admin/dashboard");
+                      }}
+                    >
+                      <div className="nav-item-left">
+                        <LayoutDashboard size={18} />
+                        <span>{t("nav.dashboard", "Admin Dashboard")}</span>
+                      </div>
+                      <ChevronRight size={16} />
+                    </div>
+                  )}
+                </div>
+
+                {/* Bottom Actions inside Mobile Drawer */}
+                <div className="mobile-drawer-footer">
+                  {isLoggedIn ? (
+                    <button
+                      className="mobile-logout-btn"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        handleLogout();
+                      }}
+                    >
+                      <LogOut size={16} /> {t("nav.logout", "Logout Account")}
+                    </button>
+                  ) : (
+                    <button
+                      className="mobile-login-btn"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        navigate("/auth/login");
+                      }}
+                    >
+                      <User size={16} /> {t("nav.login", "Sign In / Register")}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+      {/* Render shared Cart slide-out Drawer */}
+      <CartDrawer isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} />
+
+      {/* Render modern Mobile & iPad Bottom Navigation Bar */}
+      <MobileBottomNav />
+
+      {/* Render Website Settings Modal (Language & System/Dark/Light Theme) */}
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+    </>
+  );
+}
+
+export default Header;
